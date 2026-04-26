@@ -1,0 +1,15 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+# Ensure minimum availability during node drains or evictions
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "srengine.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "srengine.selectorLabels" . | nindent 6 }}
+{{- end }}

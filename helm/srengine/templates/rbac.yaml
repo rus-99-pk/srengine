@@ -1,0 +1,57 @@
+{{- $root := . }}
+# Generate roles and bindings for each monitored namespace
+{{- range .Values.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "srengine.fullname" $root }}
+  namespace: {{ . }}
+  labels:
+    {{- include "srengine.labels" $root | nindent 4 }}
+rules:
+  # Pods: required for describe and fetching logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  # Events: warning filtering is handled on the agent side
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # Workloads: required to analyze application state
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  # Networking: required for list_related operations
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  # Nodes: required for describe_node (node-level alerts)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # Quotas: required for quota-exceeded diagnostics
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list", "watch"]
+  # Storage: required for PV-related alerts
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "srengine.fullname" $root }}
+  namespace: {{ . }}
+  labels:
+    {{- include "srengine.labels" $root | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "srengine.serviceAccountName" $root }}
+    namespace: {{ $root.Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "srengine.fullname" $root }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

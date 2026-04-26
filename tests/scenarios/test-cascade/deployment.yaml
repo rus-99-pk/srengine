@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-cascade
+---
+# Backend — падает сразу
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: test-cascade
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: busybox
+          command: ["sh", "-c", "echo 'ERROR: redis connection refused at redis:6379' && exit 1"]
+          resources:
+            limits:
+              memory: "64Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: test-cascade
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8080
+---
+# Frontend — не может достучаться до backend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: test-cascade
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              i=0
+              while [ $i -lt 10 ]; do
+                echo "ERROR: upstream backend:8080 connection refused"
+                echo "WARN: retrying request to backend service"
+                i=$((i+1))
+                sleep 1
+              done
+              echo "ERROR: backend unreachable after 10 retries, giving up"
+              exit 1
+          resources:
+            limits:
+              memory: "64Mi"

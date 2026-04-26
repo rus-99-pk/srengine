@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-node-notready
+---
+# Под который будет эвакуирован когда нода уйдёт в NotReady
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workload
+  namespace: test-node-notready
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: workload
+  template:
+    metadata:
+      labels:
+        app: workload
+    spec:
+      containers:
+        - name: app
+          image: busybox
+          command: ["sh", "-c", "while true; do sleep 30; done"]
+          resources:
+            limits:
+              memory: "32Mi"
+              cpu: "50m"

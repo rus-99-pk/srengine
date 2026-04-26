@@ -1,0 +1,14 @@
+# API version of the chart
+apiVersion: v2
+name: srengine
+description: AI-powered SRE agent that automatically investigates Kubernetes alerts
+type: application
+version: 0.1.2
+appVersion: "0.1.0"
+keywords:
+  - sre
+  - ai
+  - kubernetes
+  - alertmanager
+# Project homepage
+home: https://github.com/rus-99-pk/srengine

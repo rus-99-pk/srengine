@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "srengine.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "srengine.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "srengine.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      # Secrets to pull images from private registries
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}   
+      serviceAccountName: {{ include "srengine.serviceAccountName" . }}
+      # Enforce secure pod defaults
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534   # nobody
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: srengine
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # Inject environment variables via helper
+          env:
+            {{- include "srengine.agentEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/srengine
+              readOnly: true
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # Hardened container security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "srengine.fullname" . }}
+      # Scheduling constraints
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

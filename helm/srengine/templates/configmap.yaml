@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "srengine.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+data:
+  # The system prompt is mounted to /etc/srengine/prompt.txt.
+  # Value is populated via --set-file or inline in values.yaml.
+  # Defaults to an empty string; the agent will fail if the file is empty.
+  prompt.txt: |
+    {{- if .Values.prompt }}
+    {{- .Values.prompt | nindent 4 }}
+    {{- else }}
+    {{- .Files.Get "files/prompt.txt" | nindent 4 }}
+    {{- end }}

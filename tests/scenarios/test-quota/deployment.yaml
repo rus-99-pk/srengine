@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-quota
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tight-quota
+  namespace: test-quota
+spec:
+  hard:
+    requests.cpu: "100m"
+    requests.memory: "64Mi"
+    limits.cpu: "200m"
+    limits.memory: "128Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quota-victim
+  namespace: test-quota
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: quota-victim
+  template:
+    metadata:
+      labels:
+        app: quota-victim
+    spec:
+      containers:
+        - name: app
+          image: busybox
+          command: ["sh", "-c", "while true; do sleep 30; done"]
+          resources:
+            requests:
+              memory: "48Mi"
+              cpu: "50m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"

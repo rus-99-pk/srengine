@@ -1,0 +1,111 @@
+{{- if .Values.networkPolicy.enabled }}
+---
+# Rules for the SRE agent's traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "srengine.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "srengine.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow inbound webhook traffic exclusively from the Alertmanager namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.alertmanagerNamespace }}
+      ports:
+        - protocol: TCP
+          port: 8080
+
+  egress:
+    # Allow egress to Kubernetes API server
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+
+    # Allow egress to internal Ollama service
+    {{- if .Values.ollama.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "srengine.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: ollama
+      ports:
+        - protocol: TCP
+          port: 11434
+    {{- end }}
+
+    # Allow egress for DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Allow egress HTTPS for Telegram and Webhook notifiers
+    {{- if or .Values.notifier.telegram.enabled .Values.notifier.webhook.enabled }}
+    - ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+
+    # Allow egress to Email SMTP server
+    {{- if .Values.notifier.email.enabled }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.notifier.email.smtpPort }}
+    {{- end }}
+---
+{{- if .Values.ollama.enabled }}
+# Rules for the Ollama deployment
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "srengine.ollamaServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "srengine.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ollama
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow inbound traffic ONLY from the SRE agent
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "srengine.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 11434
+  egress:
+    # Allow egress for DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow external HTTPS access during initContainer execution to pull models.
+    # Can be disabled if models are already present on the persistent volume (ollama.persistence.enabled=true).
+    {{- if not .Values.ollama.persistence.enabled }}
+    - ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+{{- end }}
+{{- end }}

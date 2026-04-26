@@ -1,0 +1,127 @@
+{{- if .Values.ollama.enabled }}
+---
+# Internal Service to expose Ollama to the agent
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "srengine.ollamaServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  type: ClusterIP
+  ports:
+    - port: 11434
+      targetPort: ollama
+      protocol: TCP
+      name: ollama
+  selector:
+    {{- include "srengine.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+---
+{{- if .Values.ollama.persistence.enabled }}
+# Persistent storage for LLM models
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "srengine.ollamaServiceName" . }}-models
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.ollama.persistence.size }}
+  {{- if .Values.ollama.persistence.storageClass }}
+  storageClassName: {{ .Values.ollama.persistence.storageClass }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "srengine.ollamaServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "srengine.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ollama
+  template:
+    metadata:
+      labels:
+        {{- include "srengine.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ollama
+    spec:
+      initContainers:
+        # Pre-pull the required LLM model before the main container starts
+        - name: pull-model
+          image: {{ .Values.ollama.image }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              ollama serve &
+              SERVER_PID=$!
+              echo "waiting for ollama to start..."
+              until ollama list 2>/dev/null; do sleep 2; done
+              echo "pulling model {{ .Values.ollama.model }}..."
+              ollama pull {{ .Values.ollama.model }}
+              echo "model ready, stopping server"
+              kill $SERVER_PID
+          env:
+            - name: OLLAMA_MODELS
+              value: /models
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          resources:
+            {{- toYaml .Values.ollama.resources | nindent 12 }}
+      containers:
+        # Main Ollama server container
+        - name: ollama
+          image: {{ .Values.ollama.image }}
+          ports:
+            - name: ollama
+              containerPort: 11434
+              protocol: TCP
+          env:
+            - name: OLLAMA_MODELS
+              value: /models
+            - name: OLLAMA_KEEP_ALIVE
+              value: "-1"
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          resources:
+            {{- toYaml .Values.ollama.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: ollama
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: ollama
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: models
+          {{- if .Values.ollama.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "srengine.ollamaServiceName" . }}-models
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}
