@@ -1,0 +1,73 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/your-org/ai-sre
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Namespaces которые агент может читать
+namespaces:
+  - production
+  - staging
+  - monitoring
+
+agent:
+  maxSteps: 8
+  stepTimeout: 60s
+  investigTimeout: 5m
+  summarizeEvery: 3   # сжимать контекст каждые N шагов (0 = выключено)
+
+llm:
+  provider: ollama
+  ollamaUrl: http://ollama:11434
+  model: qwen2.5:7b
+  timeout: 120s
+  maxRetries: 2
+
+logs:
+  maxLines: 500
+  maxPatterns: 20
+  levels:
+    - ERROR
+    - WARN
+
+server:
+  addr: ":8080"
+
+notifier:
+  type: stdout   # stdout | telegram | email
+  telegram:
+    token: ""    # задавать через secret, не здесь
+    chatId: ""
+
+# Ollama — отдельный Deployment
+ollama:
+  enabled: true
+  image: ollama/ollama:latest
+  model: qwen2.5:7b
+  resources:
+    requests:
+      memory: "6Gi"
+      cpu: "2"
+    limits:
+      memory: "8Gi"
+      cpu: "4"
+  persistence:
+    enabled: true
+    size: 10Gi
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "500m"
+
+serviceAccount:
+  create: true
+  name: ""
+
+service:
+  type: ClusterIP
+  port: 8080
