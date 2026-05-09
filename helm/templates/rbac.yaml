@@ -1,0 +1,56 @@
+{{- $root := . }}
+{{- range .Values.namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "srengine.fullname" $root }}
+  namespace: {{ . }}
+  labels:
+    {{- include "srengine.labels" $root | nindent 4 }}
+rules:
+  # Pods: describe + logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  # Events: Warning-фильтрацию делает агент на своей стороне
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # Deployments, ReplicaSets
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  # Services, Endpoints — для list_related
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  # Nodes — для describe_node (node-level alerts)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # ResourceQuota — для диагностики quota-exceeded
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list", "watch"]
+  # PersistentVolumeClaims — для PV alerts
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "srengine.fullname" $root }}
+  namespace: {{ . }}
+  labels:
+    {{- include "srengine.labels" $root | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "srengine.serviceAccountName" $root }}
+    namespace: {{ $root.Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "srengine.fullname" $root }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

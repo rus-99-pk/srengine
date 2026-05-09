@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/ai-sre/internal/config"
+	"github.com/rus-99-pk/srengine/internal/config"
 )
 
 var (

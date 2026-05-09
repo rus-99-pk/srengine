@@ -1,0 +1,12 @@
+apiVersion: v2
+name: srengine
+description: AI-powered SRE agent for automatic incident investigation in Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - sre
+  - ai
+  - kubernetes
+  - alertmanager
+home: https://github.com/rus-99-pk/srengine

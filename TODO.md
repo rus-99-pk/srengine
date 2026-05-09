@@ -1,214 +1,119 @@
-# AI SRE Agent — TODO
+# SREngine — TODO
 
 Документ фиксирует всё что обсуждалось в архитектурной сессии.
 Цель: спустя время было понятно что сделано, что нет и почему.
 
 ---
 
-## В работе / Приоритет 1
-
-### Ollama интеграция
-Первый провайдер LLM. Запускается как отдельный под в кластере.
-Модель: `qwen2.5:7b-instruct-q4_K_M` — лучший баланс quality/size для CPU-only.
-RAM: ~5GB. Работает без GPU.
-
-- [ ] Реализовать `OllamaProvider` — POST `/api/chat` с messages[]
-- [ ] Настроить keep-alive чтобы модель не выгружалась между запросами
-- [ ] Добавить retry + timeout (модель на CPU отвечает медленно, ~30-60s)
-- [ ] Проверить что Qwen2.5-7B корректно возвращает JSON без markdown-обёртки
-- [ ] Добавить валидацию ответа: если не JSON — повторить запрос (max 2 retry)
-
----
+## Сделано
 
 ### ReAct loop — Agent struct
-Центральная логика агента.
-
-- [ ] Реализовать `Agent` struct с полями: k8s, llm, tools, cfg, logger
-- [ ] Реализовать `Investigate(ctx, alert) (*Report, error)` — единственная точка входа
-- [ ] Реализовать ReAct loop: Think → Act → Observe → повтор до Answer или maxSteps
-- [ ] Ограничение: maxSteps = 8 (конфигурируемо через values.yaml)
-- [ ] При достижении maxSteps — вернуть частичный отчёт с confidence=low, не падать
-
----
+- Agent struct с полями: llm, tools, notifier, cfg, logger
+- Investigate(ctx, alert) — единственная точка входа
+- ReAct loop: Think → Act → Observe → повтор до Answer или maxSteps
+- maxSteps = 8, конфигурируемо
+- При достижении maxSteps — частичный отчёт с confidence=low
 
 ### ToolRegistry + инструменты
-- [ ] Реализовать интерфейс `Tool` (Name, Description, Execute)
-- [ ] Реализовать `ToolRegistry` с методом `Execute(ctx, ToolCall)`
-- [ ] Инструменты для реализации:
-  - [ ] `describe_resource(kind, name, namespace)` — pod / deploy / node
-  - [ ] `get_logs(name, namespace, lines, level)` — с дедупликацией перед отдачей
-  - [ ] `get_events(namespace, since_minutes)` — только Warning events
-  - [ ] `fetch_runbook(url)` — HTTP GET, trim до 2000 символов
-  - [ ] `list_related(service, namespace)` — поиск по labels / ownerReferences
-  - [ ] `check_metrics(promql, range_minutes)` — запрос в Prometheus HTTP API
-
----
+- Интерфейс Tool (Name, Description, Execute)
+- ToolRegistry с методом Execute(ctx, ToolCall)
+- describe_resource(kind, name, namespace) — pod / deploy / node / pvc
+- get_logs(name, namespace) — с дедупликацией
+- get_events(namespace) — только Warning events
+- fetch_runbook(url) — HTTP GET, trim до 2000 символов
+- list_related(service, namespace) — поиск по labels / ownerReferences
+- list_pods_by_node(node) — для node-level алертов
+- get_resource_yaml(kind, name, namespace)
+- get_hpa(name, namespace)
+- check_metrics(promql, range_minutes, limit_promql?) — Prometheus HTTP API
 
 ### K8s клиент (client-go)
-- [ ] `NewK8sClient` — InClusterConfig с fallback на KUBECONFIG (для локальной разработки)
-- [ ] `CheckAccess(ctx)` — проверка доступа к каждому NS при старте, результат в лог и отчёт
-- [ ] `describePod` — форматированный вывод без сырого YAML (только нужные поля)
-- [ ] `describeDeployment` — replicas, strategy, conditions
-- [ ] `describeNode` — capacity, allocatable, conditions
-- [ ] `GetLogs` — последние N строк, фильтр по уровню, передать в дедупликатор
-
----
+- NewK8sClient — InClusterConfig с fallback на KUBECONFIG
+- describePod, describeDeployment, describeNode, describePVC
+- GetLogs — последние N строк, передача в дедупликатор
+- GetEvents, ListRelated, ListPodsByNode, GetResourceYAML, GetHPA
 
 ### Log deduplication
-Алгоритм на основе Drain. Паттерны выводятся динамически из самих логов — не захардкожены.
-
-- [ ] Реализовать `normalize(line string) string`:
-  - strip: timestamp, IP, UUID, hex, path, quoted strings, числа → плейсхолдеры
-- [ ] Реализовать `DeduplicateLogs(lines []string) []LogPattern`
-- [ ] `LogPattern`: Template, Count, First, Last, Sample (одна оригинальная строка), Level
-- [ ] Сортировка по Count desc — самые частые первыми
-- [ ] Фильтрация перед дедупликацией: в модель идут только ERROR и WARN
-  - INFO / DEBUG отбрасываются если нет явной причины их смотреть
-- [ ] Ограничение на выход: не более 20 уникальных паттернов в модель
-
----
-
-### RBAC
-Не ClusterRole — набор Role per namespace.
-
-- [ ] В values.yaml: `rbac.namespaces: [production, staging, monitoring]`
-- [ ] Helm генерирует Role + RoleBinding для каждого namespace из списка
-- [ ] Права: get/list/watch на pods, deployments, events, logs (read-only)
-- [ ] При старте агента: `CheckAccess` пишет в лог какие NS доступны, какие нет
-- [ ] В финальном отчёте: поле `skipped_namespaces` со списком и причиной
-
----
+- normalize(line) — strip timestamp, IP, UUID, hex, числа → плейсхолдеры
+- DeduplicateLogs(lines) — Drain-подобный алгоритм
+- LogPattern: Template, Count, First, Last, Sample, Level
+- Фильтрация: только ERROR и WARN, не более 20 паттернов
 
 ### Alertmanager webhook
-- [ ] HTTP сервер на порту 8080 (конфигурируемо)
-- [ ] `POST /webhook` — принимает Alertmanager payload
-- [ ] Дедупликация алертов: один алерт не запускает два расследования одновременно
-- [ ] Очередь: если пришло 5 алертов сразу — обрабатываем последовательно
-- [ ] Таймаут на расследование: 5 минут (конфигурируемо)
+- HTTP сервер на порту 8080
+- POST /webhook — принимает Alertmanager payload
+- Дедупликация алертов по fingerprint
+- Очередь: последовательная обработка
+- Таймаут на расследование: 5 минут
 
----
+### Notifier
+- StdoutNotifier (fallback)
+- TelegramNotifier
+- EmailNotifier (HTML-шаблон)
+- WebhookNotifier (generic JSON POST)
+- MultiNotifier — параллельная рассылка во все каналы
 
 ### Промпт
-- [ ] System prompt: роль, список инструментов с сигнатурами, правила, формат JSON
-- [ ] Правила в промпте (явно, модель сама не выведет):
-  - сначала describe_resource, потом get_logs
-  - если в логах упоминается другой сервис — расследовать его тоже
-  - не выдумывать данные
-  - список доступных namespaces прямо в промпте
-- [ ] Alert context: отдельное user-сообщение с алертом, labels, runbook URL
-- [ ] tool_result: роль `user` с JSON-обёрткой `{"tool":"...","result":"..."}`
-- [ ] Context budget: system ~400 tok, alert ~300 tok, ReAct turns ~2500 tok — итого ~3200 из 4096
-
----
+- System prompt с ролью, инструментами, правилами, форматом JSON
+- Alert context — отдельное user-сообщение
+- tool_result — роль user с JSON-обёрткой
 
 ### Отчёт
-- [ ] Структура `Report`: Summary, RootCause, Confidence (high/medium/low),
-  Actions[], SkippedNamespaces[], StepsUsed, Duration
-- [ ] `Action`: Priority, Description, Command (опционально), RiskLevel (low/medium/high)
-- [ ] Отправка в Slack (webhook) — форматированное сообщение с полями отчёта
-- [ ] Нет автовыполнения действий — только рекомендации
+- Report: Summary, RootCause, Confidence, Actions[], SkippedNamespaces[], StepsUsed, Duration
+- Action: Priority, Description, Command, RiskLevel
+
+### Helm chart
+- deployment, service, configmap (промпт), rbac (Role + RoleBinding per namespace), values.yaml
+
+### Тестирование
+- kind кластер (2 nodes)
+- Сценарии: test-oom, test-crashloop, test-cascade, test-quota, test-liveness, test-pv, test-node-notready, test-high-memory
+- Все сценарии PASS
 
 ---
 
-## Структура проекта
-
-```
-ai-sre/
-├── cmd/agent/              — main, флаги, запуск HTTP сервера
-├── internal/
-│   ├── agent/              — Agent struct, Investigate, ReAct loop
-│   ├── tools/              — ToolRegistry, Tool interface, все реализации
-│   ├── k8s/                — K8sClient, describe*, getLogs, getEvents
-│   ├── llm/                — LLMProvider interface, OllamaProvider
-│   ├── logs/               — DeduplicateLogs, normalize, LogPattern
-│   └── alert/              — Alert struct, webhook handler, очередь
-├── tests/
-│   ├── integration/        — сценарии с kind кластером
-│   └── scenarios/          — yaml манифесты проблемных подов
-└── helm/ai-sre/
-    ├── templates/
-    │   ├── deployment.yaml
-    │   ├── configmap.yaml  — промпт, конфиг
-    │   ├── rbac.yaml       — Role + RoleBinding per namespace
-    │   └── service.yaml
-    └── values.yaml
-```
-
----
-
-## Тестирование
-
-### kind кластер
-- [ ] Настроить kind config (минимум 2 nodes)
-- [ ] Установить kube-prometheus-stack (только prometheus + alertmanager, без Grafana)
-  - Grafana не нужна для тестов агента, экономим ресурсы
-- [ ] Тестовые сценарии (каждый в отдельном namespace):
-  - [ ] `test-oom` — под с memory limit меньше потребления (polinux/stress)
-  - [ ] `test-crashloop` — под падает с exit 1, пишет в лог имя недоступного сервиса
-  - [ ] `test-cascade` — frontend + backend, backend падает → cascade ошибки во frontend
-  - [ ] `test-quota` — namespace с ResourceQuota, под не может задеплоиться
-
-### Go integration tests
-- [ ] `Scenario` struct: AlertFixture, ExpectIn[], ExpectActions[], MaxSteps
-- [ ] Assertions: root_cause содержит ключевые слова, actions содержат хотя бы одно из ожидаемых
-- [ ] Логировать: StepsUsed, Confidence, RootCause для каждого сценария
-- [ ] Алерты подаются напрямую через AlertFixture — не ждём Alertmanager
+## В работе / Приоритет 1
 
 ### CI (GitHub Actions)
 - [ ] kind кластер через `helm/kind-action`
-- [ ] Установка тестовых сценариев
-- [ ] sleep 30 после деплоя — даём подам упасть и войти в CrashLoop
+- [ ] Установка kube-prometheus-stack (prometheus + alertmanager, без Grafana)
+- [ ] Деплой тестовых сценариев
+- [ ] sleep после деплоя — даём подам упасть и войти в CrashLoop
 - [ ] `go test ./tests/integration/... -v -timeout=300s`
-- [ ] В CI использовать внешний LLM API (см. TODO ниже)
+- [ ] Использовать внешний LLM API в CI (Ollama не запустить в GitHub Actions)
+
+### AI.md
+- [ ] Документ с правилами и анти-паттернами для AI агента
 
 ---
 
 ## TODO (отложено)
 
 ### Внешние LLM провайдеры
-Сейчас используем только Ollama (local). В будущем нужен fallback если Ollama недоступна,
-и возможность использовать более мощную модель для сложных кейсов.
-
-- [ ] Реализовать интерфейс `LLMProvider`:
-  ```go
-  type LLMProvider interface {
-      Complete(ctx context.Context, messages []Message) (string, error)
-      Name() string
-  }
-  ```
-- [ ] Реализовать `AnthropicProvider` (Claude API)
-- [ ] Реализовать `OpenAIProvider` (GPT-4o)
-- [ ] Логика выбора провайдера: Ollama → Anthropic → OpenAI (по приоритету)
-- [ ] Конфигурация через values.yaml: `llm.provider: ollama`, `llm.fallback: anthropic`
-- [ ] API ключи через Kubernetes Secret, не в values.yaml
+- [ ] AnthropicProvider (Claude API)
+- [ ] OpenAIProvider (GPT-4o)
+- [ ] Логика выбора: Ollama → Anthropic → OpenAI
+- [ ] Конфигурация через values.yaml: llm.provider, llm.fallback
+- [ ] API ключи через Kubernetes Secret
 
 ### Human Approval Gate
-Автовыполнение не нужно на первом этапе. Но в будущем:
 - [ ] risk_score по эвристикам (production NS? stateful? DB?)
 - [ ] Slack кнопки Approve / Reject для medium risk
 - [ ] Только отчёт без действий для high risk
 
 ### Метрики агента
-- [ ] Prometheus метрики самого агента: alerts_processed, steps_per_investigation,
-  confidence_distribution, investigation_duration_seconds
+- [ ] alerts_processed, steps_per_investigation, confidence_distribution, investigation_duration_seconds
 - [ ] ServiceMonitor для scrape агента
-
-### Расширенные инструменты
-- [ ] `get_resource_yaml(kind, name, namespace)` — для сложных кейсов когда нужен полный spec
-- [ ] `list_pods_by_node(node)` — когда алерт на уровне ноды
-- [ ] `get_hpa(name, namespace)` — анализ HorizontalPodAutoscaler
 
 ### Helm chart production-ready
 - [ ] PodDisruptionBudget
-- [ ] NetworkPolicy (агент должен ходить только в K8s API и Ollama)
-- [ ] Resource limits для самого агента
+- [ ] NetworkPolicy
+- [ ] Resource limits для агента
 - [ ] Liveness / Readiness probes
 
 ---
 
 ## Решения принятые в архитектуре
-
-Зафиксировано чтобы не переобсуждать.
 
 | Решение | Выбор | Причина |
 |---|---|---|
@@ -220,3 +125,4 @@ ai-sre/
 | Автовыполнение | Отключено | Только рекомендации |
 | Формат ответа модели | JSON в system prompt | Работает на любой модели, не только с нативным tool-use |
 | Тестирование | kind + integration tests | Реальный кластер, предсказуемые сценарии |
+| Детекторы в коде | Хардкод в runReAct | Модель на CPU ненадёжно следует промпту, детекторы надёжнее |

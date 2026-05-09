@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-pv
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: small-pvc
+  namespace: test-pv
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: disk-filler
+  namespace: test-pv
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: disk-filler
+  template:
+    metadata:
+      labels:
+        app: disk-filler
+    spec:
+      containers:
+        - name: filler
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              echo "INFO: starting disk fill operation"
+              dd if=/dev/urandom of=/data/fill bs=1M count=45
+              USED=$(df /data | tail -1 | awk '{print $5}')
+              echo "ERROR: disk usage critical: ${USED} of PVC capacity used"
+              echo "ERROR: PersistentVolume small-pvc is nearly full, application cannot write data"
+              # Остаёмся живыми чтобы агент мог забрать логи
+              while true; do
+                echo "WARN: disk full, writes failing"
+                sleep 30
+              done
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            limits:
+              memory: "32Mi"
+              cpu: "50m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: small-pvc

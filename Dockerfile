@@ -5,13 +5,13 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o ai-sre ./cmd/agent
+RUN CGO_ENABLED=0 GOOS=linux go build -o srengine ./cmd/agent
 
 FROM alpine:3.19
 RUN apk --no-cache add ca-certificates tzdata
 
 WORKDIR /app
-COPY --from=builder /app/ai-sre .
+COPY --from=builder /app/srengine .
 
 EXPOSE 8080
-ENTRYPOINT ["./ai-sre"]
+ENTRYPOINT ["./srengine"]

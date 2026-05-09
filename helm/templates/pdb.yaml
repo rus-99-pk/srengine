@@ -1,0 +1,17 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "srengine.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+spec:
+  # Агент — singleton (replicaCount=1).
+  # maxUnavailable=1 позволяет node drain не застревать,
+  # но гарантирует что rolling update сначала поднимет новый под.
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "srengine.selectorLabels" . | nindent 6 }}
+{{- end }}

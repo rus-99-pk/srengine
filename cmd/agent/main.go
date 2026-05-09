@@ -7,14 +7,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/your-org/ai-sre/internal/agent"
-	"github.com/your-org/ai-sre/internal/alert"
-	"github.com/your-org/ai-sre/internal/config"
-	"github.com/your-org/ai-sre/internal/k8s"
-	"github.com/your-org/ai-sre/internal/llm"
-	"github.com/your-org/ai-sre/internal/logs"
-	"github.com/your-org/ai-sre/internal/notifier"
-	"github.com/your-org/ai-sre/internal/tools"
+	"github.com/rus-99-pk/srengine/internal/agent"
+	"github.com/rus-99-pk/srengine/internal/alert"
+	"github.com/rus-99-pk/srengine/internal/config"
+	"github.com/rus-99-pk/srengine/internal/k8s"
+	"github.com/rus-99-pk/srengine/internal/llm"
+	"github.com/rus-99-pk/srengine/internal/logs"
+	"github.com/rus-99-pk/srengine/internal/notifier"
+	"github.com/rus-99-pk/srengine/internal/tools"
 )
 
 func main() {

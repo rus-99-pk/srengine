@@ -1,0 +1,26 @@
+SREngine installed successfully!
+
+Agent namespace: {{ .Release.Namespace }}
+Monitored namespaces: {{ .Values.namespaces | join ", " }}
+LLM provider: {{ .Values.llm.provider }}
+{{- if .Values.ollama.enabled }}
+Ollama model: {{ .Values.ollama.model }}
+
+NOTE: On first install Ollama will pull the model (~4-5GB).
+      This may take several minutes depending on network speed.
+      Watch progress:
+        kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=ollama -c pull-model -f
+{{- end }}
+
+Configure Alertmanager to send webhooks to:
+  http://{{ include "srengine.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook
+
+Example alertmanager.yaml:
+  receivers:
+    - name: srengine
+      webhook_configs:
+        - url: http://{{ include "srengine.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/webhook
+
+Check agent status:
+  kubectl get pods -n {{ .Release.Namespace }}
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name=srengine -f

@@ -1,5 +1,5 @@
-BINARY   := ai-sre
-IMAGE    := ghcr.io/your-org/ai-sre
+BINARY   := srengine
+IMAGE    := ghcr.io/rus-99-pk/srengine
 TAG      := latest
 
 .PHONY: build run test test-integration lint docker-build helm-lint
@@ -23,13 +23,13 @@ docker-build:
 	docker build -t $(IMAGE):$(TAG) .
 
 helm-lint:
-	helm lint ./helm/ai-sre
+	helm lint ./helm/srengine
 
 kind-setup:
-	kind create cluster --name ai-sre-test
+	kind create cluster --name srengine-test
 	kubectl apply -f tests/scenarios/
 	@echo "Waiting for pods to start failing..."
 	sleep 30
 
 kind-teardown:
-	kind delete cluster --name ai-sre-test
+	kind delete cluster --name srengine-test

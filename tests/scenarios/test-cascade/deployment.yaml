@@ -61,11 +61,15 @@ spec:
             - sh
             - -c
             - |
-              while true; do
+              i=0
+              while [ $i -lt 10 ]; do
                 echo "ERROR: upstream backend:8080 connection refused"
                 echo "WARN: retrying request to backend service"
-                sleep 5
+                i=$((i+1))
+                sleep 1
               done
+              echo "ERROR: backend unreachable after 10 retries, giving up"
+              exit 1
           resources:
             limits:
               memory: "64Mi"

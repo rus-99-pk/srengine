@@ -1,0 +1,110 @@
+{{- if .Values.networkPolicy.enabled }}
+---
+# Исходящий трафик агента: K8s API + Ollama + нотификаторы
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "srengine.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "srengine.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Только Alertmanager может слать webhook на :8080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.alertmanagerNamespace }}
+      ports:
+        - protocol: TCP
+          port: 8080
+
+  egress:
+    # K8s API server
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+
+    # Ollama (внутри кластера)
+    {{- if .Values.ollama.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "srengine.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: ollama
+      ports:
+        - protocol: TCP
+          port: 11434
+    {{- end }}
+
+    # DNS — без него не работает ничего
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Нотификаторы — исходящий HTTPS для Telegram и Webhook
+    {{- if or .Values.notifier.telegram.enabled .Values.notifier.webhook.enabled }}
+    - ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+
+    # Email SMTP
+    {{- if .Values.notifier.email.enabled }}
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.notifier.email.smtpPort }}
+    {{- end }}
+---
+{{- if .Values.ollama.enabled }}
+# Ollama принимает только от агента
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "srengine.ollamaServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "srengine.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "srengine.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ollama
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "srengine.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 11434
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Pull модели при initContainer — нужен HTTPS наружу
+    # После того как модель скачана можно выключить через ollama.persistence.enabled=true
+    {{- if not .Values.ollama.persistence.enabled }}
+    - ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+{{- end }}
+{{- end }}

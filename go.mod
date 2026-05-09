@@ -1,4 +1,4 @@
-module github.com/your-org/ai-sre
+module github.com/rus-99-pk/srengine
 
 go 1.22
 

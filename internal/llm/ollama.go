@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/your-org/ai-sre/internal/agent"
-	"github.com/your-org/ai-sre/internal/config"
+	"github.com/rus-99-pk/srengine/internal/agent"
+	"github.com/rus-99-pk/srengine/internal/config"
 )
 
 type OllamaProvider struct {

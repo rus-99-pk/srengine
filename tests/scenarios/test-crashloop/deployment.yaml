@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-crashloop
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: test-crashloop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      containers:
+        - name: app
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              echo "INFO: starting application"
+              echo "INFO: loading config"
+              echo "ERROR: failed to connect to postgres://db-service:5432/mydb - connection refused"
+              echo "ERROR: database is required, cannot start"
+              exit 1
+          resources:
+            limits:
+              memory: "64Mi"

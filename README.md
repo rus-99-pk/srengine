@@ -1,4 +1,4 @@
-# AI SRE Agent
+# SREngine
 
 AI-powered SRE агент для автоматического расследования инцидентов в Kubernetes кластере.
 
@@ -24,8 +24,8 @@ make run
 ## Установка в кластер
 
 ```bash
-helm install ai-sre ./helm/ai-sre \
-  --namespace ai-sre \
+helm install srengine ./helm/srengine \
+  --namespace srengine \
   --create-namespace \
   --set namespaces="{production,staging}" \
   --set notifier.type=telegram \
@@ -34,8 +34,8 @@ helm install ai-sre ./helm/ai-sre \
 
 Создать secret для Telegram:
 ```bash
-kubectl create secret generic ai-sre-secrets \
-  --namespace ai-sre \
+kubectl create secret generic srengine-secrets \
+  --namespace srengine \
   --from-literal=telegram-token=YOUR_TOKEN \
   --from-literal=telegram-chat-id=YOUR_CHAT_ID
 ```
@@ -48,12 +48,12 @@ route:
   group_by: ['alertname', 'namespace']
   group_wait: 30s
   group_interval: 5m
-  receiver: ai-sre
+  receiver: srengine
 
 receivers:
-  - name: ai-sre
+  - name: srengine
     webhook_configs:
-      - url: http://ai-sre.ai-sre.svc.cluster.local:8080/webhook
+      - url: http://srengine.srengine.svc.cluster.local:8080/webhook
 ```
 
 ## Тестирование
@@ -70,7 +70,7 @@ make kind-teardown
 
 ## Конфигурация
 
-Все параметры настраиваются через `helm/ai-sre/values.yaml`.
+Все параметры настраиваются через `helm/srengine/values.yaml`.
 Переменные окружения для локальной разработки — см. `internal/config/config.go`.
 
 ## Архитектура

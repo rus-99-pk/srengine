@@ -15,6 +15,13 @@ type Config struct {
 	Logs       LogsConfig
 	Server     ServerConfig
 	Notifier   NotifierConfig
+	Metrics    MetricsConfig
+
+}
+
+type MetricsConfig struct {
+	PrometheusURL string
+	Timeout       time.Duration
 }
 
 type AgentConfig struct {
@@ -44,22 +51,32 @@ type ServerConfig struct {
 }
 
 type NotifierConfig struct {
-	Type     string // stdout | telegram | email
 	Telegram TelegramConfig
 	Email    EmailConfig
+	Webhook  WebhookConfig
 }
 
 type TelegramConfig struct {
-	Token  string
-	ChatID string
+	Enabled bool
+	Token   string
+	ChatID  string
 }
 
 type EmailConfig struct {
+	Enabled  bool
 	SMTPHost string
 	SMTPPort int
 	From     string
-	To       string
+	To       []string // несколько получателей
 	Password string
+}
+
+type WebhookConfig struct {
+	Enabled bool
+	URL     string
+	// опционально: BasicAuth, кастомные заголовки
+	Headers map[string]string
+	Timeout time.Duration
 }
 
 func Load() (*Config, error) {
@@ -71,11 +88,11 @@ func Load() (*Config, error) {
 
 	// Agent
 	cfg.Agent = AgentConfig{
-		MaxSteps:        getEnvInt("AGENT_MAX_STEPS", 8),
+		MaxSteps:        getEnvInt("AGENT_MAX_STEPS", 12),
 		StepTimeout:     getEnvDuration("AGENT_STEP_TIMEOUT", 60*time.Second),
 		InvestigTimeout: getEnvDuration("AGENT_INVESTIG_TIMEOUT", 5*time.Minute),
-		PromptPath:      getEnv("PROMPT_PATH", "/etc/ai-sre/prompt.txt"),
-		SummarizeEvery:  getEnvInt("AGENT_SUMMARIZE_EVERY", 3),
+		PromptPath:      getEnv("PROMPT_PATH", "/etc/srengine/prompt.txt"),
+		SummarizeEvery:  getEnvInt("AGENT_SUMMARIZE_EVERY", 6),
 	}
 
 	// LLM
@@ -99,19 +116,31 @@ func Load() (*Config, error) {
 		Addr: getEnv("SERVER_ADDR", ":8080"),
 	}
 
+	// Metrics
+	cfg.Metrics = MetricsConfig{
+		PrometheusURL: getEnv("PROMETHEUS_URL", ""),
+		Timeout:       getEnvDuration("METRICS_TIMEOUT", 15*time.Second),
+	}
+
 	// Notifier
 	cfg.Notifier = NotifierConfig{
-		Type: getEnv("NOTIFIER_TYPE", "stdout"),
 		Telegram: TelegramConfig{
-			Token:  getEnv("TELEGRAM_TOKEN", ""),
-			ChatID: getEnv("TELEGRAM_CHAT_ID", ""),
+			Enabled: getEnvBool("TELEGRAM_ENABLED", false),
+			Token:   getEnv("TELEGRAM_TOKEN", ""),
+			ChatID:  getEnv("TELEGRAM_CHAT_ID", ""),
 		},
 		Email: EmailConfig{
+			Enabled:  getEnvBool("EMAIL_ENABLED", false),
 			SMTPHost: getEnv("EMAIL_SMTP_HOST", ""),
 			SMTPPort: getEnvInt("EMAIL_SMTP_PORT", 587),
 			From:     getEnv("EMAIL_FROM", ""),
-			To:       getEnv("EMAIL_TO", ""),
+			To:       splitTrim(getEnv("EMAIL_TO", ""), ","),
 			Password: getEnv("EMAIL_PASSWORD", ""),
+		},
+		Webhook: WebhookConfig{
+			Enabled: getEnvBool("WEBHOOK_ENABLED", false),
+			URL:     getEnv("WEBHOOK_URL", ""),
+			Timeout: getEnvDuration("WEBHOOK_TIMEOUT", 10*time.Second),
 		},
 	}
 
@@ -129,9 +158,20 @@ func (c *Config) validate() error {
 	if c.LLM.OllamaURL == "" {
 		return fmt.Errorf("OLLAMA_URL must not be empty")
 	}
-	if c.Notifier.Type == "telegram" {
+	// Notifier
+	if c.Notifier.Telegram.Enabled {
 		if c.Notifier.Telegram.Token == "" || c.Notifier.Telegram.ChatID == "" {
-			return fmt.Errorf("TELEGRAM_TOKEN and TELEGRAM_CHAT_ID required")
+			return fmt.Errorf("TELEGRAM_TOKEN and TELEGRAM_CHAT_ID required when telegram enabled")
+		}
+	}
+	if c.Notifier.Email.Enabled {
+		if c.Notifier.Email.SMTPHost == "" || c.Notifier.Email.From == "" || len(c.Notifier.Email.To) == 0 {
+			return fmt.Errorf("EMAIL_SMTP_HOST, EMAIL_FROM, EMAIL_TO required when email enabled")
+		}
+	}
+	if c.Notifier.Webhook.Enabled {
+		if c.Notifier.Webhook.URL == "" {
+			return fmt.Errorf("WEBHOOK_URL required when webhook enabled")
 		}
 	}
 	return nil
@@ -171,4 +211,13 @@ func splitTrim(s, sep string) []string {
 		}
 	}
 	return result
+}
+
+func getEnvBool(key string, def bool) bool {
+    if v := os.Getenv(key); v != "" {
+        if b, err := strconv.ParseBool(v); err == nil {
+            return b
+        }
+    }
+    return def
 }

@@ -1,21 +1,21 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/your-org/ai-sre
+  repository: ghcr.io/rus-99-pk/srengine
   tag: latest
   pullPolicy: IfNotPresent
 
-# Namespaces которые агент может читать
+# Namespaces которые агент мониторит и имеет доступ к ресурсам
 namespaces:
   - production
   - staging
   - monitoring
 
 agent:
-  maxSteps: 8
+  maxSteps: 12
   stepTimeout: 60s
   investigTimeout: 5m
-  summarizeEvery: 3   # сжимать контекст каждые N шагов (0 = выключено)
+  summarizeEvery: 4
 
 llm:
   provider: ollama
@@ -34,13 +34,34 @@ logs:
 server:
   addr: ":8080"
 
+metrics:
+  prometheusUrl: ""   # http://prometheus-operated.monitoring:9090
+  timeout: 15s
+
+# ── Notifiers ──────────────────────────────────────────────────────────────────
+# Можно включить несколько одновременно — отчёт уйдёт во все каналы параллельно.
+# Если все disabled — fallback на stdout.
 notifier:
-  type: stdout   # stdout | telegram | email
   telegram:
-    token: ""    # задавать через secret, не здесь
+    enabled: false
+    token: ""     # рекомендуется задавать через --set или SOPS-зашифрованный values
     chatId: ""
 
-# Ollama — отдельный Deployment
+  email:
+    enabled: false
+    smtpHost: ""
+    smtpPort: 587
+    from: ""
+    to: []          # ["sre@company.com", "oncall@company.com"]
+    password: ""    # пусто = anonymous relay (internal SMTP без auth)
+
+  webhook:
+    enabled: false
+    url: ""
+    timeout: 10s
+    headers: {}     # пример: {Authorization: "Bearer token"}
+
+# ── Ollama ─────────────────────────────────────────────────────────────────────
 ollama:
   enabled: true
   image: ollama/ollama:latest
@@ -55,7 +76,9 @@ ollama:
   persistence:
     enabled: true
     size: 10Gi
+    storageClass: ""   # пусто = default StorageClass кластера
 
+# ── Agent resources ────────────────────────────────────────────────────────────
 resources:
   requests:
     memory: "128Mi"
@@ -66,8 +89,42 @@ resources:
 
 serviceAccount:
   create: true
-  name: ""
+  name: ""          # пусто = генерируется из fullname
 
 service:
   type: ClusterIP
   port: 8080
+
+# ── Probes ─────────────────────────────────────────────────────────────────────
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# ── NetworkPolicy ──────────────────────────────────────────────────────────────
+networkPolicy:
+  enabled: false
+  # Namespace где живёт Alertmanager — разрешает входящие webhook на :8080
+  # Стандартные варианты: monitoring, observability
+  alertmanagerNamespace: monitoring
+
+# ── PodDisruptionBudget ────────────────────────────────────────────────────────
+podDisruptionBudget:
+  enabled: true
+  # Для singleton (replicaCount=1): maxUnavailable=1 позволяет node drain
+  # не застревать, при этом Kubernetes сначала поднимет новый под.
+  maxUnavailable: 1

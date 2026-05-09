@@ -3,7 +3,7 @@ package alert
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	// "fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -11,10 +11,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/your-org/ai-sre/internal/config"
+	"github.com/rus-99-pk/srengine/internal/config"
 )
 
-// Alert — входящий алерт от Alertmanager
 type Alert struct {
 	Name        string            `json:"alertname"`
 	Namespace   string            `json:"namespace"`
@@ -25,7 +24,6 @@ type Alert struct {
 	Fingerprint string            `json:"fingerprint"`
 }
 
-// RunbookURL возвращает URL runbook из annotations если есть
 func (a *Alert) RunbookURL() string {
 	if u, ok := a.Annotations["runbook_url"]; ok {
 		return u
@@ -33,25 +31,19 @@ func (a *Alert) RunbookURL() string {
 	return ""
 }
 
-// DeduplicationKey — ключ для дедупликации похожих алертов
-func (a *Alert) DeduplicationKey() string {
-	return fmt.Sprintf("%s/%s", a.Name, a.Namespace)
-}
-
-// alertmanagerPayload — raw payload от Alertmanager
 type alertmanagerPayload struct {
 	Alerts []struct {
-		Status string            `json:"status"`
-		Labels map[string]string `json:"labels"`
+		Status      string            `json:"status"`
+		Labels      map[string]string `json:"labels"`
 		Annotations map[string]string `json:"annotations"`
 		StartsAt    time.Time         `json:"startsAt"`
 		Fingerprint string            `json:"fingerprint"`
 	} `json:"alerts"`
 }
 
-// Investigator — интерфейс агента (чтобы не импортировать циклически)
+// ВАЖНО: Мы изменили сигнатуру с error на (any, error)
 type Investigator interface {
-	Investigate(ctx context.Context, alert *Alert) error
+	Investigate(ctx context.Context, alert *Alert) (any, error)
 }
 
 type ServerDeps struct {
@@ -64,7 +56,8 @@ type Server struct {
 	deps     ServerDeps
 	router   *chi.Mux
 	httpSrv  *http.Server
-	inflight sync.Map // dedup map: key → struct{}
+	inflight sync.Map // fingerprint -> struct{}
+	results  sync.Map // fingerprint -> *agent.Report (передаем как any)
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -72,8 +65,11 @@ func NewServer(deps ServerDeps) *Server {
 	s.router = chi.NewRouter()
 	s.router.Use(middleware.Recoverer)
 	s.router.Use(middleware.RequestID)
+	
 	s.router.Post("/webhook", s.handleWebhook)
+	s.router.Get("/result", s.handleResult) // <-- ДОБАВИЛИ ЭНДПОИНТ
 	s.router.Get("/healthz", s.handleHealth)
+	
 	s.httpSrv = &http.Server{
 		Addr:    deps.Config.Addr,
 		Handler: s.router,
@@ -102,36 +98,59 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Группируем алерты: берём первый firing как главный,
-	// остальные добавляем в контекст
 	alert := s.extractPrimary(payload)
 	if alert == nil {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// Дедупликация: если расследование уже идёт — игнорируем
-	key := alert.DeduplicationKey()
-	if _, loaded := s.inflight.LoadOrStore(key, struct{}{}); loaded {
-		s.deps.Logger.Info("investigation already in progress, skipping",
-			"key", key)
+	// Дедупликация и ключ для тестов - Fingerprint
+	fp := alert.Fingerprint
+	if _, loaded := s.inflight.LoadOrStore(fp, struct{}{}); loaded {
+		s.deps.Logger.Info("investigation already in progress, skipping", "fingerprint", fp)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// Запускаем расследование асинхронно
 	go func() {
-		defer s.inflight.Delete(key)
+		defer s.inflight.Delete(fp)
 		ctx := context.Background()
-		if err := s.deps.Agent.Investigate(ctx, alert); err != nil {
+		
+		// Сохраняем результат в кэш сервера после расследования
+		res, err := s.deps.Agent.Investigate(ctx, alert)
+		if err != nil {
 			s.deps.Logger.Error("investigation failed", "err", err, "alert", alert.Name)
+		}
+		if res != nil {
+			s.results.Store(fp, res)
 		}
 	}()
 
 	w.WriteHeader(http.StatusOK)
 }
 
-// extractPrimary — берём первый firing алерт из группы как главный
+// ДОБАВИЛИ ОБРАБОТЧИК /result ДЛЯ ТЕСТОВ
+func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
+	fp := r.URL.Query().Get("fingerprint")
+
+	// 1. Проверяем, есть ли готовый результат
+	if res, ok := s.results.Load(fp); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(res)
+		return
+	}
+
+	// 2. Проверяем, идет ли еще расследование
+	if _, ok := s.inflight.Load(fp); ok {
+		w.WriteHeader(http.StatusAccepted) // 202
+		return
+	}
+
+	// 3. Расследование не найдено
+	w.WriteHeader(http.StatusNotFound) // 404
+}
+
 func (s *Server) extractPrimary(payload alertmanagerPayload) *Alert {
 	for _, a := range payload.Alerts {
 		if a.Status != "firing" {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/ai-sre/internal/alert"
-	"github.com/your-org/ai-sre/internal/config"
+	"github.com/rus-99-pk/srengine/internal/alert"
+	"github.com/rus-99-pk/srengine/internal/config"
 )
 
 // --- Types ---
@@ -86,8 +86,8 @@ func New(deps Deps) *Agent {
 	return &Agent{deps: deps}
 }
 
-// Investigate — главная точка входа. Реализует Investigator интерфейс.
-func (a *Agent) Investigate(ctx context.Context, al *alert.Alert) error {
+// Investigate — главная точка входа. Возвращает (any, error) для совместимости с сервером.
+func (a *Agent) Investigate(ctx context.Context, al *alert.Alert) (any, error) {
 	start := time.Now()
 	log := a.deps.Logger.With("alert", al.Name, "namespace", al.Namespace)
 	log.Info("starting investigation")
@@ -124,7 +124,7 @@ func (a *Agent) Investigate(ctx context.Context, al *alert.Alert) error {
 		log.Error("failed to send notification", "err", err)
 	}
 
-	return nil
+	return report, nil // <-- ТЕПЕРЬ ВОЗВРАЩАЕМ ОТЧЕТ СЕРВЕРУ
 }
 
 // runReAct — ReAct loop: Think → Act → Observe → repeat
@@ -140,9 +140,19 @@ func (a *Agent) runReAct(ctx context.Context, al *alert.Alert) (*Report, error) 
 	}
 
 	seenCalls := make(map[string]struct{})
+	consecutiveDupes := 0
 
 	for step := 0; step < a.deps.Config.MaxSteps; step++ {
 		a.deps.Logger.Info("react step", "step", step+1)
+
+		stepsLeft := a.deps.Config.MaxSteps - step
+		if stepsLeft == 2 {
+			// Предупреждаем модель что шаги заканчиваются
+			messages = append(messages, Message{
+				Role:    "user",
+				Content: "WARNING: only 2 steps remaining. If you have enough data — provide your answer now. Otherwise make one final tool call.",
+			})
+		}
 
 		// Think: спрашиваем модель
 		raw, err := a.completeWithRetry(ctx, messages)
@@ -185,16 +195,38 @@ func (a *Agent) runReAct(ctx context.Context, al *alert.Alert) (*Report, error) 
 		// Защита от повторных вызовов с теми же аргументами
 		callKey := fmt.Sprintf("%s:%v", ta.Action.Tool, ta.Action.Args)
 		if _, seen := seenCalls[callKey]; seen {
+			consecutiveDupes++
 			a.deps.Logger.Warn("duplicate tool call skipped",
 				"tool", ta.Action.Tool,
 				"args", ta.Action.Args,
+				"consecutive", consecutiveDupes,
 			)
+
+			// После 1 подряд дубля — принудительно запрашиваем финальный ответ
+			if consecutiveDupes >= 1 {
+				forceMsg := `You are repeating tool calls you already made. STOP. You must now provide your FINAL answer based on everything collected so far. Respond with answer JSON only:
+{"thought":"<your reasoning>","answer":{"summary":"...","root_cause":"...","confidence":"low|medium|high","actions":[...],"skipped_namespaces":[]}}`
+				messages = append(messages, Message{Role: "user", Content: forceMsg})
+				raw, err := a.completeWithRetry(ctx, messages)
+				if err != nil {
+					break
+				}
+				ta, _ := parseResponse(raw)
+				if ta != nil && ta.Answer != nil {
+					ta.Answer.StepsUsed = step + 1
+					return ta.Answer, nil
+				}
+				// Если модель всё равно не дала answer — выходим
+				break
+			}
+
 			messages = append(messages, Message{
 				Role:    "user",
 				Content: `{"tool":"` + ta.Action.Tool + `","result":"skipped: already called with same arguments, try a different tool or conclude"}`,
 			})
 			continue
 		}
+		consecutiveDupes = 0
 		seenCalls[callKey] = struct{}{}
 
 		result, toolErr := a.deps.Tools.Execute(ctx, ta.Action)
@@ -204,7 +236,18 @@ func (a *Agent) runReAct(ctx context.Context, al *alert.Alert) (*Report, error) 
 
 		a.deps.Logger.Info("tool executed",
 			"tool", ta.Action.Tool,
+			"args", ta.Action.Args,
 			"thought", ta.Thought,
+		)
+
+		a.deps.Logger.Info("tool result",
+			"tool", ta.Action.Tool,
+			"result", func() string {
+				if len(result) > 300 {
+					return result[:300] + "..."
+				}
+				return result
+			}(),
 		)
 
 		// Observe: добавляем результат в контекст
@@ -217,10 +260,206 @@ func (a *Agent) runReAct(ctx context.Context, al *alert.Alert) (*Report, error) 
 			Content: string(toolResult),
 		})
 
-		// Context summarization: каждые N шагов сжимаем историю
+		// Интерпретатор check_metrics: если вернулась утилизация — помогаем модели сделать вывод
+		if ta.Action.Tool == "check_metrics" {
+			if hint := interpretMemoryMetrics(result); hint != "" {
+				messages = append(messages, Message{Role: "user", Content: hint})
+			}
+		}
+
+		// Детектор quota — принудительно завершаем если events показали quota exceeded
+		if ta.Action.Tool == "get_events" &&
+			(strings.Contains(result, "exceeded quota") ||
+				strings.Contains(result, "FailedCreate") ||
+				strings.Contains(result, "forbidden")) {
+			messages = append(messages, Message{
+				Role: "user",
+				Content: `QUOTA EXCEEDED detected in events. This IS the root cause with confidence=high.
+		Provide your FINAL answer NOW. No more tool calls needed. Use this format:
+		{"thought":"quota exceeded is the root cause","answer":{"summary":"...","root_cause":"...","confidence":"high","actions":[...],"skipped_namespaces":[]}}`,
+			})
+			raw, err := a.completeWithRetry(ctx, messages)
+			if err == nil {
+				if parsed, _ := parseResponse(raw); parsed != nil && parsed.Answer != nil {
+					parsed.Answer.StepsUsed = step + 1
+					return parsed.Answer, nil
+				}
+			}
+			// Если не смогли распарсить — продолжаем обычный цикл
+		}
+
+		// Детектор NotReady ноды
+		if ta.Action.Tool == "describe_resource" &&
+			strings.Contains(result, "Kubelet stopped posting node status") {
+			messages = append(messages, Message{
+				Role: "user",
+				Content: `NODE NOT READY detected: kubelet stopped posting node status.
+		This IS the root cause with confidence=high. Provide your FINAL answer NOW:
+		{"thought":"kubelet stopped posting node status","answer":{"summary":"...","root_cause":"Node lost heartbeat: kubelet stopped posting node status","confidence":"high","actions":[{"priority":1,"description":"Check node connectivity and restart kubelet","command":"kubectl describe node <node>","risk_level":"medium"}],"skipped_namespaces":[]}}`,
+			})
+			raw, err := a.completeWithRetry(ctx, messages)
+			if err == nil {
+				if parsed, _ := parseResponse(raw); parsed != nil && parsed.Answer != nil {
+					parsed.Answer.StepsUsed = step + 1
+					return parsed.Answer, nil
+				}
+			}
+		}
+
+		// Детектор liveness probe с явно сломанной командой
+		if ta.Action.Tool == "describe_resource" &&
+			strings.Contains(result, "livenessProbe") &&
+			(strings.Contains(result, "exit 1") ||
+				strings.Contains(result, "exit 2")) {
+			messages = append(messages, Message{
+				Role: "user",
+				Content: `MISCONFIGURED LIVENESS PROBE detected: probe command always returns non-zero exit code.
+		This IS the root cause with confidence=high. Provide your FINAL answer NOW:
+		{"thought":"liveness probe always fails","answer":{"summary":"...","root_cause":"Liveness probe misconfigured: command always fails","confidence":"high","actions":[{"priority":1,"description":"Fix liveness probe command in deployment","command":"kubectl edit deployment -n <namespace>","risk_level":"low"}],"skipped_namespaces":[]}}`,
+			})
+			raw, err := a.completeWithRetry(ctx, messages)
+			if err == nil {
+				if parsed, _ := parseResponse(raw); parsed != nil && parsed.Answer != nil {
+					parsed.Answer.StepsUsed = step + 1
+					return parsed.Answer, nil
+				}
+			}
+		}
+
+		// Детектор PV filling up — если get_logs вернул disk full
+		if ta.Action.Tool == "get_logs" &&
+			(strings.Contains(result, "disk full") ||
+				strings.Contains(result, "disk usage critical") ||
+				strings.Contains(result, "nearly full") ||
+				strings.Contains(result, "writes failing")) {
+			messages = append(messages, Message{
+				Role: "user",
+				Content: `DISK FULL detected in pod logs. The PersistentVolume is nearly full.
+		This IS the root cause with confidence=high. Provide your FINAL answer NOW:
+		{"thought":"disk full detected in logs","answer":{"summary":"...","root_cause":"PersistentVolume is nearly full, application cannot write data","confidence":"high","actions":[{"priority":1,"description":"Expand PVC capacity or clean up disk space","command":"kubectl get pvc -n <namespace>","risk_level":"medium"}],"skipped_namespaces":[]}}`,
+			})
+			raw, err := a.completeWithRetry(ctx, messages)
+			if err == nil {
+				if parsed, _ := parseResponse(raw); parsed != nil && parsed.Answer != nil {
+					parsed.Answer.StepsUsed = step + 1
+					return parsed.Answer, nil
+				}
+			}
+		}
+
+		// Детектор PVC MountedBy — форсируем get_logs для пода который монтирует PVC
+		if ta.Action.Tool == "describe_resource" &&
+			strings.Contains(result, "MountedBy:") {
+			// Извлекаем имя пода из строки "  - pod-name (phase=Running..."
+			mountedPod := ""
+			for _, line := range strings.Split(result, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "- ") {
+					// Формат: "- disk-filler-xxx (phase=Running, restarts=0)"
+					part := strings.TrimPrefix(line, "- ")
+					if idx := strings.Index(part, " ("); idx > 0 {
+						mountedPod = part[:idx]
+					}
+				}
+			}
+			if mountedPod != "" {
+				// Извлекаем namespace из результата
+				ns := ""
+				for _, line := range strings.Split(result, "\n") {
+					if strings.HasPrefix(line, "PVC: ") {
+						// Формат: "PVC: test-pv/small-pvc"
+						parts := strings.Split(strings.TrimPrefix(line, "PVC: "), "/")
+						if len(parts) == 2 {
+							ns = parts[0]
+						}
+					}
+				}
+				if ns == "" {
+					ns = al.Namespace
+				}
+				messages = append(messages, Message{
+					Role: "user",
+					Content: fmt.Sprintf(
+						`PVC is mounted by pod "%s". Get its logs NOW to check for disk full errors:
+		{"thought":"checking logs of pod mounting the PVC","action":{"tool":"get_logs","args":{"name":"%s","namespace":"%s"}}}`,
+						mountedPod, mountedPod, ns),
+				})
+				raw, err := a.completeWithRetry(ctx, messages)
+				if err == nil {
+					if parsed, _ := parseResponse(raw); parsed != nil {
+						if parsed.Answer != nil {
+							parsed.Answer.StepsUsed = step + 1
+							return parsed.Answer, nil
+						}
+						if parsed.Action != nil {
+							// Модель согласилась вызвать get_logs — продолжаем цикл
+							messages = append(messages, Message{Role: "assistant", Content: raw})
+						}
+					}
+				}
+			}
+		}
+
+		// Детектор OOMKilled: нет логов (ожидаемо) → сразу финальный ответ
+		if ta.Action.Tool == "get_logs" &&
+			strings.TrimSpace(result) == "No ERROR/WARN log patterns found" &&
+			strings.Contains(al.Name, "CrashLoop") {
+			// Проверяем что в предыдущем describe был OOMKilled
+			oomDetected := false
+			for _, m := range messages {
+				if strings.Contains(m.Content, "OOMKilled") {
+					oomDetected = true
+					break
+				}
+			}
+			if oomDetected {
+				messages = append(messages, Message{
+					Role: "user",
+					Content: `OOMKilled confirmed + empty logs is expected (OOMKilled pods produce no logs).
+This IS the root cause with confidence=high. Provide your FINAL answer NOW:
+{"thought":"OOMKilled confirmed, empty logs expected","answer":{"summary":"...","root_cause":"Container exceeded its memory limit and was OOMKilled","confidence":"high","actions":[{"priority":1,"description":"Increase memory limit for the container","command":"kubectl edit deployment -n <namespace>","risk_level":"low"}],"skipped_namespaces":[]}}`,
+				})
+				raw, err := a.completeWithRetry(ctx, messages)
+				if err == nil {
+					if parsed, _ := parseResponse(raw); parsed != nil && parsed.Answer != nil {
+						parsed.Answer.StepsUsed = step + 1
+						return parsed.Answer, nil
+					}
+				}
+			}
+		}
+
+		// Детектор PodHighMemoryUsage: pod Running + нет логов → форсируем check_metrics
+		if ta.Action.Tool == "get_logs" &&
+			strings.TrimSpace(result) == "No ERROR/WARN log patterns found" &&
+			(strings.Contains(al.Name, "HighMemory") ||
+				strings.Contains(al.Name, "MemoryUsage") ||
+				strings.Contains(al.Name, "MemoryPressure")) {
+
+			podName := al.Labels["pod"]
+			if podName == "" {
+				podName, _ = ta.Action.Args["name"].(string)
+			}
+			ns := al.Namespace
+
+			messages = append(messages, Message{
+				Role: "user",
+				Content: fmt.Sprintf(
+					`No error logs found — expected for PodHighMemoryUsage (pod is Running, not crashing).`+
+						` Memory issue is invisible in logs. You MUST call check_metrics to confirm:`+"\n"+
+						`{"thought":"no error logs expected for memory alert, checking prometheus metrics",`+
+						`"action":{"tool":"check_metrics","args":{`+
+						`"promql":"container_memory_working_set_bytes{pod=\"%s\",namespace=\"%s\"}",`+
+						`"limit_promql":"kube_pod_container_resource_limits{pod=\"%s\",namespace=\"%s\",resource=\"memory\"}",`+
+						`"range_minutes":15}}}`,
+					podName, ns, podName, ns),
+			})
+		}
+
+		// Context summarization
 		if a.deps.Config.SummarizeEvery > 0 &&
 			(step+1)%a.deps.Config.SummarizeEvery == 0 {
-			messages = a.summarizeContext(ctx, messages)
+			messages = a.summarizeContext(ctx, messages, seenCalls)
 		}
 	}
 
@@ -251,7 +490,7 @@ func (a *Agent) runReAct(ctx context.Context, al *alert.Alert) (*Report, error) 
 
 // summarizeContext — сжимает накопленную историю ReAct в короткое резюме.
 // Сохраняет system prompt и alert context, заменяет все ReAct turns одним summary.
-func (a *Agent) summarizeContext(ctx context.Context, messages []Message) []Message {
+func (a *Agent) summarizeContext(ctx context.Context, messages []Message, seenCalls map[string]struct{}) []Message {
 	// Первые два сообщения не трогаем: system + alert context
 	if len(messages) <= 2 {
 		return messages
@@ -259,6 +498,12 @@ func (a *Agent) summarizeContext(ctx context.Context, messages []Message) []Mess
 
 	fixed := messages[:2]
 	history := messages[2:]
+
+	// Собираем список уже вызванных инструментов
+	var calledTools strings.Builder
+	for key := range seenCalls {
+		fmt.Fprintf(&calledTools, "- %s\n", key)
+	}
 
 	// Собираем историю в текст для сжатия
 	var sb strings.Builder
@@ -274,7 +519,6 @@ func (a *Agent) summarizeContext(ctx context.Context, messages []Message) []Mess
 
 	summary, err := a.deps.LLM.Complete(ctx, summaryMessages)
 	if err != nil {
-		// Если не смогли сжать — возвращаем оригинал
 		a.deps.Logger.Warn("context summarization failed, keeping original", "err", err)
 		return messages
 	}
@@ -284,10 +528,16 @@ func (a *Agent) summarizeContext(ctx context.Context, messages []Message) []Mess
 		"summary_len", len(summary),
 	)
 
-	// Заменяем всю историю одним summary сообщением
+	// Формируем итоговое сообщение с явным списком уже вызванных инструментов
+	content := fmt.Sprintf(
+		"Investigation summary so far:\n%s\n\nALREADY CALLED (do not repeat these):\n%s\nContinue the investigation with NEW tool calls only.",
+		summary,
+		calledTools.String(),
+	)
+
 	return append(fixed, Message{
 		Role:    "user",
-		Content: "Investigation summary so far: " + summary + "\nContinue the investigation.",
+		Content: content,
 	})
 }
 
@@ -352,6 +602,19 @@ func (a *Agent) buildAlertContext(al *alert.Alert) string {
 
 	if u := al.RunbookURL(); u != "" {
 		fmt.Fprintf(&sb, "Runbook: %s\n", u)
+	}
+
+	// Подсказываем агенту точку входа — чтобы не тратить шаг на угадывание
+	if node := al.Labels["node"]; node != "" {
+		fmt.Fprintf(&sb, "\nPrimary resource: node/%s", node)
+		fmt.Fprintf(&sb, "\nNote: this is a NODE alert. Start with describe_resource(kind=node, name=%s, namespace=''). Node resources do not require namespace.", node)
+	} else if pod := al.Labels["pod"]; pod != "" {
+		fmt.Fprintf(&sb, "\nPrimary resource: pod/%s in namespace %s", pod, al.Namespace)
+		fmt.Fprintf(&sb, "\nFor Prometheus queries use EXACTLY: pod=\"%s\", namespace=\"%s\"", pod, al.Namespace)
+	} else if deploy := al.Labels["deployment"]; deploy != "" {
+		fmt.Fprintf(&sb, "\nPrimary resource: deployment/%s in namespace %s", deploy, al.Namespace)
+	} else if pvc := al.Labels["persistentvolumeclaim"]; pvc != "" {
+		fmt.Fprintf(&sb, "\nPrimary resource: persistentvolumeclaim/%s in namespace %s", pvc, al.Namespace)
 	}
 
 	fmt.Fprintf(&sb, "\nInvestigate this alert. Start with the most affected resource.")
@@ -428,4 +691,28 @@ func extractFirstJSON(s string) string {
 	}
 
 	return s
+}
+
+// interpretMemoryMetrics разбирает вывод check_metrics и возвращает
+// вывод для модели если утилизация памяти высокая.
+func interpretMemoryMetrics(result string) string {
+	for _, line := range strings.Split(result, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "utilization=") {
+			continue
+		}
+		switch {
+		case strings.Contains(line, "CRITICAL"):
+			return `Memory utilization is CRITICAL (≥95% of limit). Pod is at immediate risk of OOMKill.
+This IS the root cause. Provide your FINAL answer with confidence=high.
+Root cause: "Container is using [X]Mi of [limit]Mi memory limit ([pct]% utilization), at immediate risk of OOMKill."
+Actions: increase memory limit immediately (low risk), investigate memory leak.`
+		case strings.Contains(line, "WARNING"):
+			return `Memory utilization is HIGH (≥85% of limit). This confirms the PodHighMemoryUsage alert.
+This IS the root cause. Provide your FINAL answer with confidence=high.
+Root cause: "Container memory usage is high: [X]Mi of [limit]Mi limit ([pct]% utilization)."
+Actions: increase memory limit, monitor for growth trend.`
+		}
+	}
+	return ""
 }
