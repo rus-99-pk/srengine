@@ -18,14 +18,6 @@ var (
 	rePath      = regexp.MustCompile(`(/[\w.\-]+){2,}`)
 	reQuoted    = regexp.MustCompile(`"[^"]{0,80}"`)
 	reNumber    = regexp.MustCompile(`\b\d+(\.\d+)?\b`)
-
-	// Уровни логов
-	levelPatterns = map[string]*regexp.Regexp{
-		"ERROR": regexp.MustCompile(`(?i)\b(error|err|fatal|panic|exception)\b`),
-		"WARN":  regexp.MustCompile(`(?i)\b(warn|warning)\b`),
-		"INFO":  regexp.MustCompile(`(?i)\binfo\b`),
-		"DEBUG": regexp.MustCompile(`(?i)\b(debug|trace)\b`),
-	}
 )
 
 type LogPattern struct {

@@ -499,23 +499,6 @@ func getEnvDuration(key string, def time.Duration) time.Duration {
 	return def
 }
 
-func getControlPlaneIP(t *testing.T) string {
-    t.Helper()
-    cmd := exec.Command("docker", "inspect",
-        "srengine-dev-control-plane",
-        "--format", "{{.NetworkSettings.Networks.kind.IPAddress}}",
-    )
-    out, err := cmd.Output()
-    if err != nil {
-        t.Fatalf("get control-plane IP: %v", err)
-    }
-    ip := strings.TrimSpace(string(out))
-    if ip == "" {
-        t.Fatal("control-plane IP is empty")
-    }
-    return ip
-}
-
 func cordonAndDrainNode(t *testing.T, nodeName string) {
 	t.Helper()
 
@@ -535,9 +518,9 @@ func cordonAndDrainNode(t *testing.T, nodeName string) {
 
 	t.Cleanup(func() {
 		t.Logf("unpausing docker container %s", nodeName)
-		exec.Command("docker", "unpause", nodeName).Run()
+		_ = exec.Command("docker", "unpause", nodeName).Run()
 		waitForNodeReady(t, nodeName, 3*time.Minute)
-		exec.Command("kubectl", "uncordon", nodeName).Run()
+		_ = exec.Command("kubectl", "uncordon", nodeName).Run()
 	})
 }
 

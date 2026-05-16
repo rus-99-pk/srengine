@@ -482,8 +482,3 @@ func memSeverity(pct float64) string {
 		return "OK"
 	}
 }
-
-// formatPromResults — оставляем для обратной совместимости
-func formatPromResults(resp prometheusRangeResponse, rangeMin int) string {
-	return formatMetrics(resp.Data.Result, nil, rangeMin, false)
-}
