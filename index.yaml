@@ -1,0 +1,20 @@
+apiVersion: v1
+entries:
+  srengine:
+  - apiVersion: v2
+    appVersion: 0.1.0
+    created: "2026-05-17T10:15:50.15817334Z"
+    description: AI-powered SRE agent that automatically investigates Kubernetes alerts
+    digest: 3b3b33a917f50aa4c3c4736be5ae2c00b4c3a736af6155df780992884164d47a
+    home: https://github.com/rus-99-pk/srengine
+    keywords:
+    - sre
+    - ai
+    - kubernetes
+    - alertmanager
+    name: srengine
+    type: application
+    urls:
+    - https://github.com/rus-99-pk/srengine/releases/download/srengine-0.1.1/srengine-0.1.1.tgz
+    version: 0.1.1
+generated: "2026-05-17T10:15:50.158179351Z"
