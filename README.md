@@ -1,13 +1,10 @@
-<div align="center">
+# SREngine Kubernetes Helm Chart
 
-  # SREngine Kubernetes Helm Chart
+[![CI Status](https://github.com/rus-99-pk/srengine/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/rus-99-pk/srengine/actions/workflows/ci.yaml)
+[![Releases downloads](https://img.shields.io/github/downloads/rus-99-pk/srengine/total.svg)](https://github.com/rus-99-pk/srengine/releases)
+[![License](https://img.shields.io/github/license/rus-99-pk/srengine.svg)](https://github.com/rus-99-pk/srengine/blob/main/LICENSE)
 
-  [![CI Status](https://github.com/rus-99-pk/srengine/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/rus-99-pk/srengine/actions/workflows/ci.yaml)
-  [![Releases downloads](https://img.shields.io/github/downloads/rus-99-pk/srengine/total.svg)](https://github.com/rus-99-pk/srengine/releases)
-  [![License](https://img.shields.io/github/license/rus-99-pk/srengine.svg)](https://github.com/rus-99-pk/srengine/blob/main/LICENSE)
-
-  **SREngine is an AI-powered SRE agent that automatically investigates Kubernetes alerts.**
-</div>
+**SREngine is an AI-powered SRE agent that automatically investigates Kubernetes alerts.**
 
 <br/>
 
