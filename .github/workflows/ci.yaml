@@ -68,33 +68,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  helm-pages:
-    name: Publish Helm Chart to GitHub Pages
-    runs-on: ubuntu-latest
-    needs: docker
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Configure Git
-        run: |
-          git config user.name "$GITHUB_ACTOR"
-          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-
-      - name: Run chart-releaser
-        uses: helm/chart-releaser-action@v1.6.0
-        env:
-          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-        with:
-          charts_dir: helm
-
   release:
     name: GitHub Release (Docker & Helm)
     runs-on: ubuntu-latest
@@ -142,8 +115,32 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
       - name: Package Helm chart
         run: helm package helm/srengine
+
+      - name: Publish Helm chart to GitHub Pages
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+          mkdir -p /tmp/helm-pkg
+          cp helm/srengine-*.tgz /tmp/helm-pkg/
+
+          git fetch origin gh-pages || true
+          git checkout gh-pages 2>/dev/null || git checkout --orphan gh-pages
+
+          helm repo index /tmp/helm-pkg --url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }} --merge index.yaml 2>/dev/null || \
+          helm repo index /tmp/helm-pkg --url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+
+          cp /tmp/helm-pkg/*.tgz .
+          cp /tmp/helm-pkg/index.yaml .
+
+          git add *.tgz index.yaml
+          git diff --cached --quiet || git commit -m "Release ${{ github.ref_name }}"
+          git push origin gh-pages
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
